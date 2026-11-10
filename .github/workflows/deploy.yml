@@ -24,7 +24,7 @@ jobs:
 
       - name: Update Kubeconfig for EKS
         run: |
-          aws eks update-kubeconfig --name Kedar01 --region us-east-1
+          aws eks update-kubeconfig --name naresh --region us-east-1
 
       - name: Deploy Kubernetes Manifests
         run: |
