@@ -1,29 +1,38 @@
 
-name: infra Terraform
+name: Terraform EKS and Day 9 Deployment
 
 on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
+  id-token: write
 
 env:
   AWS_REGION: us-east-1
   TF_VERSION: "1.9.8"
   TF_WORKING_DIR: Day-8-Terraform-EKS
+  DAY9_DIR: Day-9-Ingress-Path-Base-Deployment
+  EKS_CLUSTER_NAME: naresh
 
 jobs:
-  terraform:
-    name: Terraform Validate, Plan & Apply
+  terraform-and-deploy:
+    name: Provision EKS and Deploy Day 9
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout repository
+
+      # =====================================================
+      # 1. CHECKOUT REPOSITORY
+      # =====================================================
+
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Check GitHub OIDC claims
+      # =====================================================
+      # 2. CHECK GITHUB OIDC CLAIMS
+      # =====================================================
+
       - name: Check GitHub OIDC Claims
         uses: actions/github-script@v7
         with:
@@ -37,7 +46,10 @@ jobs:
             console.log("Subject:", payload.sub);
             console.log("Issuer:", payload.iss);
 
-      # AWS OIDC authentication
+      # =====================================================
+      # 3. AWS OIDC AUTHENTICATION
+      # =====================================================
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -45,11 +57,18 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: GitHubActionsSession
 
-      # Verify AWS identity
-      - name: Verify AWS Identity
-        run: aws sts get-caller-identity
+      # =====================================================
+      # 4. VERIFY AWS IDENTITY
+      # =====================================================
 
-      # Setup Terraform
+      - name: Verify AWS Identity
+        run: |
+          aws sts get-caller-identity
+
+      # =====================================================
+      # 5. SETUP TERRAFORM
+      # =====================================================
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -58,27 +77,231 @@ jobs:
       - name: Terraform Version
         run: terraform version
 
-      # Terraform Init
+      # =====================================================
+      # 6. TERRAFORM INIT
+      # =====================================================
+
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=kubernetes-tfstate-017183879898-us-east-1" \
+            -backend-config="key=eks/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true"
 
-      # Terraform Validate
+      # =====================================================
+      # 7. TERRAFORM VALIDATE
+      # =====================================================
+
       - name: Terraform Validate
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
-      # Terraform Plan
+      # =====================================================
+      # 8. TERRAFORM PLAN
+      # =====================================================
+
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform plan -out=tfplan
 
-      # Terraform Apply
+      # =====================================================
+      # 9. TERRAFORM APPLY
+      # =====================================================
+
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform apply -auto-approve tfplan
 
-      # Terraform Outputs
+      # =====================================================
+      # 10. TERRAFORM OUTPUTS
+      # =====================================================
+
       - name: Terraform Outputs
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform output
+
+      # =====================================================
+      # 11. GET AWS ACCOUNT ID
+      # =====================================================
+
+      - name: Get AWS Account ID
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity \
+            --query Account \
+            --output text)
+
+          echo "AWS_ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
+          echo "ECR_REGISTRY=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com" >> "$GITHUB_ENV"
+
+      # =====================================================
+      # 12. ENSURE ECR REPOSITORIES EXIST
+      # =====================================================
+
+      - name: Create ECR Repositories
+        run: |
+          for REPO in main aws azure gcp; do
+            if ! aws ecr describe-repositories \
+              --repository-names "$REPO" \
+              --region "$AWS_REGION" >/dev/null 2>&1; then
+
+              aws ecr create-repository \
+                --repository-name "$REPO" \
+                --region "$AWS_REGION"
+            fi
+          done
+
+      # =====================================================
+      # 13. ECR LOGIN
+      # =====================================================
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" |
+          docker login \
+            --username AWS \
+            --password-stdin "$ECR_REGISTRY"
+
+      # =====================================================
+      # 14. BUILD AND PUSH DAY 9 IMAGES
+      # =====================================================
+
+      - name: Build and Push Main Image
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/main:latest" \
+            "./$DAY9_DIR"
+
+          docker push "$ECR_REGISTRY/main:latest"
+
+      - name: Build and Push AWS Image
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/aws:latest" \
+            "./$DAY9_DIR/aws"
+
+          docker push "$ECR_REGISTRY/aws:latest"
+
+      - name: Build and Push Azure Image
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/azure:latest" \
+            "./$DAY9_DIR/azure"
+
+          docker push "$ECR_REGISTRY/azure:latest"
+
+      - name: Build and Push GCP Image
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/gcp:latest" \
+            "./$DAY9_DIR/gcp"
+
+          docker push "$ECR_REGISTRY/gcp:latest"
+
+      # =====================================================
+      # 15. INSTALL KUBECTL
+      # =====================================================
+
+      - name: Setup Kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      # =====================================================
+      # 16. CONNECT TO EKS
+      # =====================================================
+
+      - name: Update EKS Kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$EKS_CLUSTER_NAME"
+
+      # =====================================================
+      # 17. VERIFY EKS CONNECTION
+      # =====================================================
+
+      - name: Verify EKS Cluster
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+      # =====================================================
+      # 18. VERIFY NGINX INGRESS CONTROLLER
+      # =====================================================
+
+      - name: Verify NGINX Ingress Controller
+        run: |
+          kubectl rollout status \
+            deployment/ingress-nginx-controller \
+            -n ingress-nginx \
+            --timeout=180s
+
+      # =====================================================
+      # 19. UPDATE ECR IMAGE REFERENCES IN MANIFESTS
+      # =====================================================
+
+      - name: Update Kubernetes Image References
+        run: |
+          MANIFEST_DIR="./$DAY9_DIR/k8s-files"
+
+          sed -i -E \
+            "s#[0-9]{12}\.dkr\.ecr\.[^/]+\.amazonaws\.com#$ECR_REGISTRY#g" \
+            "$MANIFEST_DIR"/*.yml
+
+          echo "Updated image references:"
+          grep -n "image:" "$MANIFEST_DIR"/*.yml
+
+      # =====================================================
+      # 20. DEPLOY DAY 9 APPLICATIONS
+      # =====================================================
+
+      - name: Deploy Day 9 Applications
+        run: |
+          MANIFEST_DIR="./$DAY9_DIR/k8s-files"
+
+          kubectl apply -f "$MANIFEST_DIR/main.yml"
+          kubectl apply -f "$MANIFEST_DIR/aws.yml"
+          kubectl apply -f "$MANIFEST_DIR/azure.yml"
+          kubectl apply -f "$MANIFEST_DIR/gcp.yml"
+
+      # =====================================================
+      # 21. DEPLOY NGINX INGRESS
+      # =====================================================
+
+      - name: Deploy NGINX Ingress Rules
+        run: |
+          kubectl apply -f "./$DAY9_DIR/k8s-files/ingress.yml"
+
+      # =====================================================
+      # 22. WAIT FOR APPLICATION ROLLOUT
+      # =====================================================
+
+      - name: Wait for Deployments
+        run: |
+          kubectl rollout status deployment/main-deployment --timeout=180s
+          kubectl rollout status deployment/aws-deployment --timeout=180s
+          kubectl rollout status deployment/azure-deployment --timeout=180s
+          kubectl rollout status deployment/gcp-deployment --timeout=180s
+
+      # =====================================================
+      # 23. VERIFY FINAL DEPLOYMENT
+      # =====================================================
+
+      - name: Verify Kubernetes Resources
+        run: |
+          echo "========== NODES =========="
+          kubectl get nodes
+
+          echo "========== PODS =========="
+          kubectl get pods -o wide
+
+          echo "========== SERVICES =========="
+          kubectl get services
+
+          echo "========== DEPLOYMENTS =========="
+          kubectl get deployments
+
+          echo "========== INGRESS =========="
+          kubectl get ingress
