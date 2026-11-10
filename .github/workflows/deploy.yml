@@ -1,37 +1,63 @@
-name: Deploy to EKS
+name: Create EKS Cluster
 
 on:
-  push:
-    branches: [ main ] # Change to your default branch if different (e.g., master)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: true
 
 jobs:
-  deploy:
+  create-eks:
+    name: Provision EKS with Terraform
     runs-on: ubuntu-latest
-    
+
+    defaults:
+      run:
+        working-directory: Day-8-Terraform-EKS
+
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1 # Change to your specific AWS region (e.g., us-west-2)
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v3
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
 
-      - name: Update Kubeconfig for EKS
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
         run: |
-          aws eks update-kubeconfig --name naresh --region us-east-1
+          terraform init \
+            -backend-config="bucket=kubernetes-tfstate-017183879898-us-east-1" \
+            -backend-config="key=eks/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
 
-      - name: Deploy Kubernetes Manifests
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Verify EKS cluster
         run: |
-          kubectl apply -f manifests/
-          # Apply your Kubernetes deployment, service, and ingress manifests
-          kubectl apply -f k8s/
-          
-          # Verification: Check deployment status
-          kubectl get pods
-          kubectl get ingress
+          aws eks describe-cluster \
+            --name naresh \
+            --region "${AWS_REGION}" \
+            --query 'cluster.status' \
+            --output text
