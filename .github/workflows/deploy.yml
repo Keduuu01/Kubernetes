@@ -61,7 +61,7 @@ jobs:
       - name: Terraform validate and plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          terraform fmt -check
+          terraform fmt -recursive
           terraform validate
           terraform plan -out=tfplan
 
