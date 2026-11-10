@@ -18,7 +18,7 @@ provider "aws" {
 variable "cluster_version" {
   description = "Kubernetes version for EKS"
   type        = string
-  default     = "1.33"
+  default     = "1.35"
 }
 
 # Cost-conscious lab VPC: public subnets only, no NAT Gateway.
