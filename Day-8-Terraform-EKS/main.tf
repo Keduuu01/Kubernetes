@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.10.0"
 
   required_providers {
     aws = {
@@ -21,12 +21,10 @@ variable "cluster_version" {
   default     = "1.35"
 }
 
-# Cost-conscious lab VPC: public subnets only, no NAT Gateway.
 resource "aws_vpc" "eks_vpc" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
-
   tags = { Name = "eks-vpc" }
 }
 
@@ -40,7 +38,11 @@ resource "aws_subnet" "public1" {
   cidr_block              = "10.0.1.0/24"
   availability_zone       = "us-east-1a"
   map_public_ip_on_launch = true
-  tags                    = { Name = "eks-public-1a" }
+  tags = {
+    Name                              = "eks-public-1a"
+    "kubernetes.io/role/elb"          = "1"
+    "kubernetes.io/cluster/naresh"    = "shared"
+  }
 }
 
 resource "aws_subnet" "public2" {
@@ -48,17 +50,19 @@ resource "aws_subnet" "public2" {
   cidr_block              = "10.0.2.0/24"
   availability_zone       = "us-east-1b"
   map_public_ip_on_launch = true
-  tags                    = { Name = "eks-public-1b" }
+  tags = {
+    Name                              = "eks-public-1b"
+    "kubernetes.io/role/elb"          = "1"
+    "kubernetes.io/cluster/naresh"    = "shared"
+  }
 }
 
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.eks_vpc.id
-
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
-
   tags = { Name = "eks-public-rt" }
 }
 
@@ -74,7 +78,6 @@ resource "aws_route_table_association" "pub2" {
 
 resource "aws_iam_role" "cluster_role" {
   name = "eks-cluster-role"
-
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -92,7 +95,6 @@ resource "aws_iam_role_policy_attachment" "cluster_policy" {
 
 resource "aws_iam_role" "worker_role" {
   name = "eks-worker-role"
-
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -123,6 +125,11 @@ resource "aws_eks_cluster" "eks" {
   role_arn = aws_iam_role.cluster_role.arn
   version  = var.cluster_version
 
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
   vpc_config {
     subnet_ids = [
       aws_subnet.public1.id,
@@ -132,8 +139,7 @@ resource "aws_eks_cluster" "eks" {
   }
 
   depends_on = [aws_iam_role_policy_attachment.cluster_policy]
-
-  tags = { Name = "naresh" }
+  tags       = { Name = "naresh" }
 }
 
 resource "aws_eks_node_group" "node_group" {
@@ -189,6 +195,10 @@ output "cluster_name" {
 
 output "cluster_endpoint" {
   value = aws_eks_cluster.eks.endpoint
+}
+
+output "vpc_id" {
+  value = aws_vpc.eks_vpc.id
 }
 
 output "region" {
