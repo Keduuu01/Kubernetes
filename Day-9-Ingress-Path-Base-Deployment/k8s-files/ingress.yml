@@ -1,23 +1,21 @@
-#kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.2.1/deploy/static/provider/cloud/deploy.yaml #-install ingress contr
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: k8s-ingress
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "false"
-    nginx.ingress.kubernetes.io/rewrite-target: /   # strip prefix so backend serves "/"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:387158738772:certificate/8e2e078b-32f2-47e4-a39c-e0bbe6d20c8e
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    alb.ingress.kubernetes.io/success-codes: "200"
 spec:
-  ingressClassName: nginx
+  ingressClassName: alb
   rules:
-    - http:
+    - host: 387158738772.realhandsonlabs.net
+      http:
         paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: main-service
-                port:
-                  number: 80
           - path: /aws
             pathType: Prefix
             backend:
@@ -39,4 +37,10 @@ spec:
                 name: gcp-service
                 port:
                   number: 80
-
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: main-service
+                port:
+                  number: 80
