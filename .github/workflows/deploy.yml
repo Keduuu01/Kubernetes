@@ -1,106 +1,84 @@
+
 name: infra Terraform
+
 on:
   workflow_dispatch:
-GitHub OIDC Permissions
+
 permissions:
   id-token: write
   contents: read
+
 env:
   AWS_REGION: us-east-1
   TF_VERSION: "1.9.8"
-  TF_WORKING_DIR: EKS-Terraform
+  TF_WORKING_DIR: Day-8-Terraform-EKS
+
 jobs:
   terraform:
     name: Terraform Validate, Plan & Apply
     runs-on: ubuntu-latest
-steps:
-  # ============================================================
-  # CHECKOUT REPOSITORY
-  # ============================================================
-  - name: Checkout Repository
-    uses: actions/checkout@v4
 
-  # ============================================================
-  # CHECK GITHUB OIDC CLAIMS
-  # ============================================================
-  - name: Check GitHub OIDC Claims
-    uses: actions/github-script@v7
-    with:
-      script: |
-        const token = await core.getIDToken('sts.amazonaws.com');
-        const payload = JSON.parse(
-          Buffer.from(token.split('.')[1], 'base64url').toString()
-        );
+    steps:
+      # Checkout repository
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-        console.log("Audience:", payload.aud);
-        console.log("Subject:", payload.sub);
-        console.log("Issuer:", payload.iss);
+      # Check GitHub OIDC claims
+      - name: Check GitHub OIDC Claims
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('sts.amazonaws.com');
+            const payload = JSON.parse(
+              Buffer.from(token.split('.')[1], 'base64url').toString()
+            );
 
-  # ============================================================
-  # AWS OIDC AUTHENTICATION
-  # ============================================================
-  - name: Configure AWS Credentials
-    uses: aws-actions/configure-aws-credentials@v4
-    with:
-      role-to-assume: arn:aws:iam::392211784798:role/GitHubActionsRole-K8
-      aws-region: ${{ env.AWS_REGION }}
-      role-session-name: GitHubActionsSession
+            console.log("Audience:", payload.aud);
+            console.log("Subject:", payload.sub);
+            console.log("Issuer:", payload.iss);
 
-  # ============================================================
-  # VERIFY AWS IDENTITY
-  # ============================================================
-  - name: Verify AWS Identity
-    run: |
-      aws sts get-caller-identity
+      # AWS OIDC authentication
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::017183879898:role/admin-126458
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActionsSession
 
-  # ============================================================
-  # TERRAFORM SETUP
-  # ============================================================
-  - name: Setup Terraform
-    uses: hashicorp/setup-terraform@v3
-    with:
-      terraform_version: ${{ env.TF_VERSION }}
+      # Verify AWS identity
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
 
-  - name: Terraform Version
-    run: |
-      terraform version
+      # Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
-  # ============================================================
-  # TERRAFORM INIT
-  # ============================================================
-  - name: Terraform Init
-    working-directory: ${{ env.TF_WORKING_DIR }}
-    run: |
-      terraform init
+      - name: Terraform Version
+        run: terraform version
 
-  # ============================================================
-  # TERRAFORM VALIDATE
-  # ============================================================
-  - name: Terraform Validate
-    working-directory: ${{ env.TF_WORKING_DIR }}
-    run: |
-      terraform validate
+      # Terraform Init
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
 
-  # ============================================================
-  # TERRAFORM PLAN
-  # ============================================================
-  - name: Terraform Plan
-    working-directory: ${{ env.TF_WORKING_DIR }}
-    run: |
-      terraform plan -out=tfplan
+      # Terraform Validate
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
 
-  # ============================================================
-  # TERRAFORM APPLY
-  # ============================================================
-  - name: Terraform Apply
-    working-directory: ${{ env.TF_WORKING_DIR }}
-    run: |
-      terraform apply -auto-approve tfplan
+      # Terraform Plan
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform plan -out=tfplan
 
-  # ============================================================
-  # TERRAFORM OUTPUTS
-  # ============================================================
-  - name: Terraform Outputs
-    working-directory: ${{ env.TF_WORKING_DIR }}
-    run: |
-      terraform output
+      # Terraform Apply
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -auto-approve tfplan
+
+      # Terraform Outputs
+      - name: Terraform Outputs
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform output
