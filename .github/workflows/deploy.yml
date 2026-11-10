@@ -1,6 +1,8 @@
 name: Create EKS Cluster
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
