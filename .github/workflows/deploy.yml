@@ -1,184 +1,106 @@
-
-name: Deploy Kubernetes to AWS EKS
-
+name: infra Terraform
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
-
+GitHub OIDC Permissions
 permissions:
-  contents: read
   id-token: write
-
+  contents: read
 env:
   AWS_REGION: us-east-1
-  EKS_CLUSTER_NAME: naresh
-  TF_IN_AUTOMATION: true
-
+  TF_VERSION: "1.9.8"
+  TF_WORKING_DIR: EKS-Terraform
 jobs:
-  deploy:
-    name: Provision EKS and Deploy Application
+  terraform:
+    name: Terraform Validate, Plan & Apply
     runs-on: ubuntu-latest
+steps:
+  # ============================================================
+  # CHECKOUT REPOSITORY
+  # ============================================================
+  - name: Checkout Repository
+    uses: actions/checkout@v4
 
-    steps:
-      # 1. Checkout repository
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  # ============================================================
+  # CHECK GITHUB OIDC CLAIMS
+  # ============================================================
+  - name: Check GitHub OIDC Claims
+    uses: actions/github-script@v7
+    with:
+      script: |
+        const token = await core.getIDToken('sts.amazonaws.com');
+        const payload = JSON.parse(
+          Buffer.from(token.split('.')[1], 'base64url').toString()
+        );
 
-      # 2. Configure AWS OIDC
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+        console.log("Audience:", payload.aud);
+        console.log("Subject:", payload.sub);
+        console.log("Issuer:", payload.iss);
 
-      # 3. Verify AWS identity
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
+  # ============================================================
+  # AWS OIDC AUTHENTICATION
+  # ============================================================
+  - name: Configure AWS Credentials
+    uses: aws-actions/configure-aws-credentials@v4
+    with:
+      role-to-assume: arn:aws:iam::392211784798:role/GitHubActionsRole-K8
+      aws-region: ${{ env.AWS_REGION }}
+      role-session-name: GitHubActionsSession
 
-      # 4. Setup Terraform
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+  # ============================================================
+  # VERIFY AWS IDENTITY
+  # ============================================================
+  - name: Verify AWS Identity
+    run: |
+      aws sts get-caller-identity
 
-      # 5. Terraform initialization
-      - name: Terraform Init
-        working-directory: Day-8-Terraform-EKS
-        run: |
-          terraform init \
-            -backend-config="bucket=kubernetes-tfstate-017183879898-us-east-1" \
-            -backend-config="key=eks/terraform.tfstate" \
-            -backend-config="region=${AWS_REGION}" \
-            -backend-config="encrypt=true" \
-            -backend-config="use_lockfile=true"
+  # ============================================================
+  # TERRAFORM SETUP
+  # ============================================================
+  - name: Setup Terraform
+    uses: hashicorp/setup-terraform@v3
+    with:
+      terraform_version: ${{ env.TF_VERSION }}
 
-      # 6. Terraform validation
-      - name: Terraform Validate
-        working-directory: Day-8-Terraform-EKS
-        run: terraform validate
+  - name: Terraform Version
+    run: |
+      terraform version
 
-      # 7. Terraform plan
-      - name: Terraform Plan
-        working-directory: Day-8-Terraform-EKS
-        run: terraform plan -out=tfplan
+  # ============================================================
+  # TERRAFORM INIT
+  # ============================================================
+  - name: Terraform Init
+    working-directory: ${{ env.TF_WORKING_DIR }}
+    run: |
+      terraform init
 
-      # 8. Terraform apply
-      - name: Terraform Apply
-        working-directory: Day-8-Terraform-EKS
-        run: terraform apply -auto-approve tfplan
+  # ============================================================
+  # TERRAFORM VALIDATE
+  # ============================================================
+  - name: Terraform Validate
+    working-directory: ${{ env.TF_WORKING_DIR }}
+    run: |
+      terraform validate
 
-      # 9. Wait for EKS cluster
-      - name: Wait for EKS Cluster
-        run: |
-          aws eks wait cluster-active \
-            --name "$EKS_CLUSTER_NAME" \
-            --region "$AWS_REGION"
+  # ============================================================
+  # TERRAFORM PLAN
+  # ============================================================
+  - name: Terraform Plan
+    working-directory: ${{ env.TF_WORKING_DIR }}
+    run: |
+      terraform plan -out=tfplan
 
-      # 10. Configure kubectl
-      - name: Configure kubectl
-        run: |
-          aws eks update-kubeconfig \
-            --region "$AWS_REGION" \
-            --name "$EKS_CLUSTER_NAME"
+  # ============================================================
+  # TERRAFORM APPLY
+  # ============================================================
+  - name: Terraform Apply
+    working-directory: ${{ env.TF_WORKING_DIR }}
+    run: |
+      terraform apply -auto-approve tfplan
 
-      # 11. Grant GitHub Actions role EKS access
-      - name: Configure EKS access
-        env:
-          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-        run: |
-          aws eks describe-access-entry \
-            --cluster-name "$EKS_CLUSTER_NAME" \
-            --principal-arn "$ROLE_ARN" \
-            --region "$AWS_REGION" >/dev/null 2>&1 || \
-          aws eks create-access-entry \
-            --cluster-name "$EKS_CLUSTER_NAME" \
-            --principal-arn "$ROLE_ARN" \
-            --region "$AWS_REGION"
-
-          aws eks associate-access-policy \
-            --cluster-name "$EKS_CLUSTER_NAME" \
-            --principal-arn "$ROLE_ARN" \
-            --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
-            --access-scope type=cluster \
-            --region "$AWS_REGION"
-
-          sleep 15
-          kubectl get nodes
-
-      # 12. Login to Amazon ECR
-      - name: Login to Amazon ECR
-        id: ecr
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity \
-            --query Account --output text)
-
-          echo "ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
-          echo "ECR_REGISTRY=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com" >> "$GITHUB_ENV"
-
-          aws ecr get-login-password --region "$AWS_REGION" |
-            docker login \
-              --username AWS \
-              --password-stdin "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
-
-      # 13. Create ECR repositories if missing
-      - name: Create ECR repositories
-        run: |
-          for REPO in main aws azure gcp; do
-            aws ecr describe-repositories \
-              --repository-names "$REPO" \
-              --region "$AWS_REGION" >/dev/null 2>&1 || \
-            aws ecr create-repository \
-              --repository-name "$REPO" \
-              --region "$AWS_REGION"
-          done
-
-      # 14. Build and push Docker images
-      - name: Build and Push Docker Images
-        working-directory: Day-9-Ingress-Path-Base-Deployment
-        run: |
-          docker build -t "$ECR_REGISTRY/main:latest" \
-            -f Dockerfile .
-
-          docker build -t "$ECR_REGISTRY/aws:latest" \
-            -f aws/Dockerfile aws/
-
-          docker build -t "$ECR_REGISTRY/azure:latest" \
-            -f azure/Dockerfile azure/
-
-          docker build -t "$ECR_REGISTRY/gcp:latest" \
-            -f gcp/Dockerfile gcp/
-
-          docker push "$ECR_REGISTRY/main:latest"
-          docker push "$ECR_REGISTRY/aws:latest"
-          docker push "$ECR_REGISTRY/azure:latest"
-          docker push "$ECR_REGISTRY/gcp:latest"
-
-      # 15. Update Kubernetes image references
-      - name: Update Kubernetes Image References
-        working-directory: Day-9-Ingress-Path-Base-Deployment
-        run: |
-          sed -i -E \
-            "s|[0-9]+\.dkr\.ecr\.[^/]+\.amazonaws\.com|$ECR_REGISTRY|g" \
-            k8s-files/*.yml
-
-      # 16. Deploy applications
-      - name: Deploy Kubernetes Applications
-        working-directory: Day-9-Ingress-Path-Base-Deployment
-        run: |
-          kubectl apply -f k8s-files/main.yml
-          kubectl apply -f k8s-files/aws.yml
-          kubectl apply -f k8s-files/azure.yml
-          kubectl apply -f k8s-files/gcp.yml
-          kubectl apply -f k8s-files/ingress.yml
-
-      # 17. Wait for deployments
-      - name: Verify Kubernetes Deployments
-        run: |
-          kubectl rollout status deployment/main-deployment --timeout=180s
-          kubectl rollout status deployment/aws-deployment --timeout=180s
-          kubectl rollout status deployment/azure-deployment --timeout=180s
-          kubectl rollout status deployment/gcp-deployment --timeout=180s
-
-          kubectl get deployments
-          kubectl get pods -A
-          kubectl get svc -A
-          kubectl get ingress
+  # ============================================================
+  # TERRAFORM OUTPUTS
+  # ============================================================
+  - name: Terraform Outputs
+    working-directory: ${{ env.TF_WORKING_DIR }}
+    run: |
+      terraform output
